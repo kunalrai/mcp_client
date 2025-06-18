@@ -9,9 +9,40 @@ from datetime import datetime
 import threading
 import queue
 import time
+import requests
+import re
 
 app = Flask(__name__)
 app.secret_key = 'your-secret-key-change-this'
+
+# Groq API configuration
+GROQ_API_KEY = None  # Will be set when user provides it
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+class GroqClient:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+    
+    def chat_completion(self, messages, model="llama-3.1-70b-versatile", max_tokens=1000):
+        """Send a chat completion request to Groq"""
+        try:
+            payload = {
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "temperature": 0.7
+            }
+            
+            response = requests.post(GROQ_API_URL, headers=self.headers, json=payload)
+            response.raise_for_status()
+            
+            return response.json()
+        except Exception as e:
+            return {"error": str(e)}
 
 class MCPClient:
     def __init__(self, server_command):
@@ -154,12 +185,137 @@ class MCPClient:
             self.process.terminate()
             self.process.wait()
 
-# Global MCP client instance
+# Global client instances
 mcp_client = None
+groq_client = None
+
+def analyze_user_intent(user_message, available_tools):
+    """Use Groq to analyze user intent and determine if MCP tools should be used"""
+    if not groq_client:
+        return None, "Groq client not initialized"
+    
+    tools_description = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in available_tools])
+    
+    system_prompt = f"""You are an intelligent assistant that helps users interact with filesystem tools. 
+
+Available tools:
+{tools_description}
+
+Your job is to analyze the user's request and determine:
+1. If they need to use any of the available tools
+2. What tool to use and with what parameters
+3. Provide a natural language response
+
+If the user is asking about files, directories, or filesystem operations, you should use the appropriate tool.
+If it's a general conversation, respond naturally without using tools.
+
+Respond in JSON format:
+{{
+    "use_tool": true/false,
+    "tool_name": "tool_name_if_needed",
+    "tool_params": {{"param": "value"}},
+    "response": "Your natural language response"
+}}
+
+If use_tool is true, keep the response brief and let the tool results speak for themselves.
+If use_tool is false, provide a complete conversational response.
+"""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message}
+    ]
+    
+    try:
+        response = groq_client.chat_completion(messages, max_tokens=500)
+        
+        if "error" in response:
+            return None, f"Groq API error: {response['error']}"
+        
+        content = response['choices'][0]['message']['content']
+        
+        # Try to parse JSON response
+        try:
+            intent_data = json.loads(content)
+            return intent_data, None
+        except json.JSONDecodeError:
+            # If JSON parsing fails, treat as general conversation
+            return {
+                "use_tool": False,
+                "tool_name": None,
+                "tool_params": None,
+                "response": content
+            }, None
+            
+    except Exception as e:
+        return None, f"Error analyzing intent: {str(e)}"
+
+def format_tool_result_with_groq(user_message, tool_result, tool_name):
+    """Use Groq to format tool results in a conversational way"""
+    if not groq_client:
+        return str(tool_result)
+    
+    system_prompt = f"""You are a helpful assistant. The user asked: "{user_message}"
+
+I used the {tool_name} tool and got this result:
+{json.dumps(tool_result, indent=2)}
+
+Please provide a natural, conversational response that summarizes the result in a user-friendly way.
+If it's a directory listing, format it nicely. If it's file content, present it clearly.
+Be concise but informative."""
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": "Please format this result for me."}
+    ]
+    
+    try:
+        response = groq_client.chat_completion(messages, max_tokens=800)
+        
+        if "error" in response:
+            return f"Tool result: {tool_result}"
+        
+        return response['choices'][0]['message']['content']
+        
+    except Exception as e:
+        return f"Tool result: {tool_result}"
 
 @app.route('/')
 def index():
     return render_template('chat.html')
+
+@app.route('/set_groq_key', methods=['POST'])
+def set_groq_key():
+    global groq_client, GROQ_API_KEY
+    
+    api_key = request.json.get('api_key', '').strip()
+    
+    if not api_key:
+        return jsonify({
+            'status': 'error',
+            'message': 'API key is required'
+        })
+    
+    GROQ_API_KEY = api_key
+    groq_client = GroqClient(api_key)
+    
+    # Test the API key
+    test_response = groq_client.chat_completion([
+        {"role": "user", "content": "Hello"}
+    ], max_tokens=10)
+    
+    if "error" in test_response:
+        groq_client = None
+        GROQ_API_KEY = None
+        return jsonify({
+            'status': 'error',
+            'message': f'Invalid API key: {test_response["error"]}'
+        })
+    
+    return jsonify({
+        'status': 'success',
+        'message': 'Groq API key set successfully'
+    })
 
 @app.route('/start_server', methods=['POST'])
 def start_server():
@@ -220,7 +376,13 @@ def start_server():
 
 @app.route('/chat', methods=['POST'])
 def chat():
-    global mcp_client
+    global mcp_client, groq_client
+    
+    if not groq_client:
+        return jsonify({
+            'status': 'error',
+            'message': 'Please set your Groq API key first'
+        })
     
     if not mcp_client:
         return jsonify({
@@ -229,59 +391,48 @@ def chat():
         })
     
     user_message = request.json.get('message', '')
+    available_tools = session.get('tools', [])
     
-    # Simple command parsing
-    if user_message.startswith('/list'):
-        # List directory command
-        parts = user_message.split(' ', 1)
-        if len(parts) > 1:
-            directory_path = parts[1]
-        else:
-            directory_path = "C:/Users/hclraik/Downloads"
-        
-        response = mcp_client.call_tool("list_directory", {"path": directory_path})
-        
-        if 'result' in response:
-            content = response['result']['content']
-            if content and len(content) > 0:
-                return jsonify({
-                    'status': 'success',
-                    'message': f"Directory listing for {directory_path}:",
-                    'content': content[0]['text']
-                })
-            else:
-                return jsonify({
-                    'status': 'error',
-                    'message': 'No content returned'
-                })
-        else:
-            return jsonify({
-                'status': 'error',
-                'message': response.get('error', 'Unknown error')
-            })
+    # Analyze user intent with Groq
+    intent_data, error = analyze_user_intent(user_message, available_tools)
     
-    elif user_message.startswith('/tools'):
-        # List available tools
-        tools_response = mcp_client.list_tools()
-        if 'result' in tools_response:
-            tools = tools_response['result'].get('tools', [])
-            tools_text = "\n".join([f"- {tool['name']}: {tool['description']}" for tool in tools])
+    if error:
+        return jsonify({
+            'status': 'error',
+            'message': error
+        })
+    
+    if intent_data['use_tool'] and intent_data['tool_name']:
+        # Execute the tool
+        tool_response = mcp_client.call_tool(
+            intent_data['tool_name'], 
+            intent_data['tool_params'] or {}
+        )
+        
+        if 'result' in tool_response:
+            # Format the result with Groq
+            formatted_response = format_tool_result_with_groq(
+                user_message, 
+                tool_response['result'], 
+                intent_data['tool_name']
+            )
+            
             return jsonify({
                 'status': 'success',
-                'message': 'Available tools:',
-                'content': tools_text
+                'message': formatted_response,
+                'tool_used': intent_data['tool_name'],
+                'raw_result': tool_response['result']
             })
         else:
             return jsonify({
                 'status': 'error',
-                'message': 'Failed to get tools list'
+                'message': f"Tool error: {tool_response.get('error', 'Unknown error')}"
             })
-    
     else:
+        # Regular conversation response
         return jsonify({
-            'status': 'info',
-            'message': 'Available commands:',
-            'content': '/list [path] - List directory contents\n/tools - Show available tools'
+            'status': 'success',
+            'message': intent_data['response']
         })
 
 @app.route('/stop_server', methods=['POST'])
