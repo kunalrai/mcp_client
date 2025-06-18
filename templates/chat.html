@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MCP Chat Client</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .chat-container {
+            width: 90%;
+            max-width: 800px;
+            height: 90vh;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .chat-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            text-align: center;
+            position: relative;
+        }
+
+        .chat-header h1 {
+            font-size: 1.5rem;
+            margin-bottom: 10px;
+        }
+
+        .server-controls {
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .server-controls input {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            placeholder-color: rgba(255, 255, 255, 0.7);
+            flex: 1;
+            min-width: 200px;
+        }
+
+        .server-controls input::placeholder {
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .status {
+            margin-top: 10px;
+            padding: 5px 10px;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            text-align: center;
+        }
+
+        .status.success {
+            background: rgba(76, 175, 80, 0.3);
+            color: #2e7d32;
+        }
+
+        .status.error {
+            background: rgba(244, 67, 54, 0.3);
+            color: #c62828;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            max-width: 80%;
+            padding: 15px 20px;
+            border-radius: 20px;
+            word-wrap: break-word;
+            animation: messageSlide 0.3s ease-out;
+        }
+
+        @keyframes messageSlide {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 5px;
+        }
+
+        .message.bot {
+            background: #f5f5f5;
+            color: #333;
+            align-self: flex-start;
+            border-bottom-left-radius: 5px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .message.error {
+            background: #ffebee;
+            color: #c62828;
+            border: 1px solid #ffcdd2;
+        }
+
+        .message-content {
+            white-space: pre-wrap;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+        }
+
+        .chat-input-container {
+            padding: 20px;
+            background: #f8f9fa;
+            border-top: 1px solid #e9ecef;
+        }
+
+        .chat-input {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 12px 20px;
+            border: 2px solid #e9ecef;
+            border-radius: 25px;
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+
+        .chat-input input:focus {
+            border-color: #667eea;
+        }
+
+        .send-btn {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+
+        .send-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .send-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .help-text {
+            margin-top: 10px;
+            font-size: 0.85rem;
+            color: #666;
+            text-align: center;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <div class="chat-header">
+            <h1>🔧 MCP Filesystem Chat</h1>
+            <div class="server-controls">
+                <input type="text" id="serverPath" placeholder="node dist/index.js --stdio" value="node dist/index.js --stdio">
+                <button class="btn" onclick="startServer()">Start Server</button>
+                <button class="btn" onclick="stopServer()">Stop Server</button>
+            </div>
+            <div id="serverStatus" class="status" style="display: none;"></div>
+        </div>
+
+        <div class="chat-messages" id="chatMessages">
+            <div class="message bot">
+                <div class="message-content">Welcome to the MCP Filesystem Chat! 
+
+First, start the MCP server by clicking "Start Server" above.
+
+Available commands:
+• /list [path] - List directory contents (default: Downloads folder)
+• /tools - Show available MCP tools
+
+Example: /list C:/Users/hclraik/Downloads</div>
+            </div>
+        </div>
+
+        <div class="chat-input-container">
+            <div class="chat-input">
+                <input type="text" id="messageInput" placeholder="Type a command... (e.g., /list or /tools)" disabled>
+                <button class="send-btn" id="sendBtn" onclick="sendMessage()" disabled>Send</button>
+            </div>
+            <div class="help-text">
+                Start the server first, then use commands like "/list" to interact with the filesystem
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let serverStarted = false;
+
+        function showStatus(message, type) {
+            const status = document.getElementById('serverStatus');
+            status.textContent = message;
+            status.className = `status ${type}`;
+            status.style.display = 'block';
+        }
+
+        function addMessage(content, type = 'bot', isContent = false) {
+            const messagesDiv = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.textContent = content;
+            
+            messageDiv.appendChild(contentDiv);
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        async function startServer() {
+            const serverPath = document.getElementById('serverPath').value;
+            
+            try {
+                showStatus('Starting server...', 'info');
+                
+                const response = await fetch('/start_server', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        server_path: serverPath
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    serverStarted = true;
+                    showStatus('✅ Server running', 'success');
+                    document.getElementById('messageInput').disabled = false;
+                    document.getElementById('sendBtn').disabled = false;
+                    
+                    addMessage(`Server started successfully!\nAvailable tools: ${data.tools.map(t => t.name).join(', ')}`);
+                } else {
+                    showStatus('❌ Failed to start server', 'error');
+                    addMessage(`Error: ${data.message}`, 'error');
+                }
+            } catch (error) {
+                showStatus('❌ Connection error', 'error');
+                addMessage(`Connection error: ${error.message}`, 'error');
+            }
+        }
+
+        async function stopServer() {
+            try {
+                const response = await fetch('/stop_server', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const data = await response.json();
+                serverStarted = false;
+                showStatus('Server stopped', 'info');
+                document.getElementById('messageInput').disabled = true;
+                document.getElementById('sendBtn').disabled = true;
+                
+                addMessage('Server stopped.');
+            } catch (error) {
+                addMessage(`Error stopping server: ${error.message}`, 'error');
+            }
+        }
+
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const message = input.value.trim();
+            
+            if (!message || !serverStarted) return;
+            
+            // Add user message
+            addMessage(message, 'user');
+            input.value = '';
+            
+            // Show loading
+            const sendBtn = document.getElementById('sendBtn');
+            const originalText = sendBtn.textContent;
+            sendBtn.innerHTML = '<div class="loading"></div>';
+            sendBtn.disabled = true;
+            
+            try {
+                const response = await fetch('/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        message: message
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    let responseText = data.message;
+                    if (data.content) {
+                        responseText += '\n\n' + data.content;
+                    }
+                    addMessage(responseText);
+                } else if (data.status === 'info') {
+                    let responseText = data.message;
+                    if (data.content) {
+                        responseText += '\n\n' + data.content;
+                    }
+                    addMessage(responseText);
+                } else {
+                    addMessage(`Error: ${data.message}`, 'error');
+                }
+            } catch (error) {
+                addMessage(`Connection error: ${error.message}`, 'error');
+            } finally {
+                sendBtn.textContent = originalText;
+                sendBtn.disabled = false;
+                input.focus();
+            }
+        }
+
+        // Enter key support
+        document.getElementById('messageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Focus input on load
+        window.addEventListener('load', function() {
+            document.getElementById('serverPath').focus();
+        });
+    </script>
+</body>
+</html>
